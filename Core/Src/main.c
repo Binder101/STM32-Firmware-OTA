@@ -34,15 +34,20 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define RX_BUFFER_SIZE 256
+#define RX_BUFFER_SIZE 77
 #define ACK_BYTE 0x06  // ASCII ACK character
 #define NACK_BYTE 0x15 // ASCII NACK character
+#define ERROR_BYTE_1 0x20 // ERROR BYTE
+#define ERROR_BYTE_2 0x21
 /* USER CODE END PD */
 
 /* USER CODE BEGIN PV */
 uint8_t rxBuffer[RX_BUFFER_SIZE];
 uint8_t ackByte = ACK_BYTE;
 uint8_t nackByte = NACK_BYTE;
+uint8_t errorByte1 = ERROR_BYTE_1;
+uint8_t errorByte2 = ERROR_BYTE_2;
+int isValid = 0;
 
 volatile uint16_t oldPos = 0;
 volatile uint16_t newPos = 0;
@@ -65,6 +70,15 @@ void UART_DMA_Init(void)
     HAL_UART_Receive_DMA(&huart2, rxBuffer, RX_BUFFER_SIZE);
 }
 
+void UartRx_Circular_Reset(void) {
+    __disable_irq();
+    oldPos = 0;
+    newPos = RX_BUFFER_SIZE - __HAL_DMA_GET_COUNTER(huart2.hdmarx); // snapshot if needed
+    dataReady = 0;
+    dataLength = 0;
+    memset(rxBuffer, 0, RX_BUFFER_SIZE); // optional
+    __enable_irq();
+}
 
 /**
  * @brief Process received UART data
@@ -75,17 +89,28 @@ void UART_DMA_Init(void)
 uint8_t ProcessReceivedData(uint8_t* data, uint16_t length)
 {
     if (length == 0 || length > RX_BUFFER_SIZE) return 0;
-    memcpy(processedData, data, length);
-    return 1;
+    else if (length == 76){
+		memcpy(processedData, data, length);
+		return 1;
+    }
+    else if (length < 76){
+    	UartRx_Circular_Reset();
+    	return 2;
+    }
+    return 3;
 }
 
 
-void SendAcknowledgment(uint8_t isValid)
+void SendAcknowledgment(int isValid)
 {
-    if (!isValid) {
+    if (isValid == 0) {
         HAL_UART_Transmit(&huart2, &nackByte, 1, 100);
-    } else {
+    } else if (isValid == 1){
         HAL_UART_Transmit(&huart2, &ackByte, 1, 100);
+    } else if (isValid == 2){
+    	HAL_UART_Transmit(&huart2, &errorByte1, 1, 100);
+    } else {
+    	HAL_UART_Transmit(&huart2, &errorByte2, 1, 100);
     }
 }
 
