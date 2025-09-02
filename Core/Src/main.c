@@ -39,12 +39,16 @@
 #define NACK_BYTE 0x15 // ASCII NACK character
 #define ERROR_BYTE_1 0x20 // ERROR BYTE
 #define ERROR_BYTE_2 0x21
+#define HEADER_CHECK 0x22
+#define BAD_HEADER_CHECK 0x23
 /* USER CODE END PD */
 
 /* USER CODE BEGIN PV */
 uint8_t rxBuffer[RX_BUFFER_SIZE];
 uint8_t ackByte = ACK_BYTE;
 uint8_t nackByte = NACK_BYTE;
+uint8_t header_good_byte = HEADER_CHECK;
+uint8_t header_bad_byte = BAD_HEADER_CHECK;
 uint8_t errorByte1 = ERROR_BYTE_1;
 uint8_t errorByte2 = ERROR_BYTE_2;
 int isValid = 0;
@@ -80,6 +84,13 @@ void UartRx_Circular_Reset(void) {
     __enable_irq();
 }
 
+void processData(void){
+	if(processedData[0] == 0xAA && processedData[1] == 0x55){
+		HAL_UART_Transmit(&huart2, &header_good_byte, 1, 100);
+	} else {
+		HAL_UART_Transmit(&huart2, &header_bad_byte, 1, 100);
+	}
+}
 /**
  * @brief Process received UART data
  * @param data: pointer to received data
@@ -91,6 +102,7 @@ uint8_t ProcessReceivedData(uint8_t* data, uint16_t length)
     if (length == 0 || length > RX_BUFFER_SIZE) return 0;
     else if (length == 76){
 		memcpy(processedData, data, length);
+		processData();
 		return 1;
     }
     else if (length < 76){
