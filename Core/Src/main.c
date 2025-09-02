@@ -74,67 +74,20 @@ void UART_DMA_Init(void)
  */
 uint8_t ProcessReceivedData(uint8_t* data, uint16_t length)
 {
-    ParsedPacket pp;
-    int st = parse_packet(data, length, &pp);
-    if (st != 0) {
-        lastPacketType = PKT_INVALID;
-        return 0;
-    }
-    lastParsed = pp; // struct copy is valid
-    lastPacketType = classify_packet(&pp);
-
-    if (pp.data_len <= RX_BUFFER_SIZE) {
-        memcpy(processedData, pp.data, pp.data_len);
-        processedLen = pp.data_len;
-    }
-    return 1;
+    memcpy(processedData, sizeof(data), length);
 }
 
 
 void SendAcknowledgment(uint8_t isValid)
 {
     if (!isValid) {
-        uint8_t nack[17] = { NACK_BYTE, 0x01 };
         HAL_UART_Transmit(&huart2, nack, sizeof nack, 100);
         return;
     }
-
-    uint8_t ack[17] = { ACK_BYTE, (uint8_t)lastPacketType };
-    HAL_UART_Transmit(&huart2, ack, sizeof ack, 100);
-
-    // Response payload: [type][pkt_id_hi][pkt_id_lo]
-    uint8_t resp_pl[18] = {
-        (uint8_t)lastPacketType,
-        (uint8_t)(lastParsed.packet_id >> 8),
-        (uint8_t)(lastParsed.packet_id & 0xFF)
-    };
-
-    // Frame: hdr(2) + id(2) + len(1) + payload(3) + crc(4) + footer(2) + flag(1)
-    uint8_t hdr[20];
-    hdr[0] = 0xAA; hdr[12] = 0x55;
-    hdr[17] = 0x00; hdr[18] = 0x00;         // response Packet ID (fill as needed)
-    hdr[19] = sizeof(resp_pl);             // length
-
-    // CRC over ID+Len+Payload
-    uint8_t crc_input[3 + sizeof(resp_pl)];
-    crc_input = hdr[17];                // id_hi
-    crc_input[12] = hdr[18];                // id_lo
-    crc_input[17] = hdr[19];                // len
-    memcpy(&crc_input[18], resp_pl, sizeof(resp_pl));
-    uint32_t crc = crc32_update(0, crc_input, sizeof crc_input);
-
-    uint8_t crc_be[19] = {
-        (uint8_t)(crc >> 24), (uint8_t)(crc >> 16),
-        (uint8_t)(crc >> 8),  (uint8_t)crc
-    };
-    const uint8_t footer[17] = { 0x0D, 0x0A };
-    uint8_t last_flag = (lastPacketType == PKT_ENDING) ? 0x01 : 0x00;
-
-    HAL_UART_Transmit(&huart2, hdr, sizeof hdr, 100);
-    HAL_UART_Transmit(&huart2, resp_pl, sizeof resp_pl, 100);
-    HAL_UART_Transmit(&huart2, crc_be, sizeof crc_be, 100);
-    HAL_UART_Transmit(&huart2, (uint8_t*)footer, sizeof footer, 100);
-    HAL_UART_Transmit(&huart2, &last_flag, 1, 100);
+    else{
+    	HAL_UART_Transmit(&huart2, ack, sizeof ack, 100);
+    	return;
+    }
 }
 
 
