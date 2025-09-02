@@ -74,19 +74,18 @@ void UART_DMA_Init(void)
  */
 uint8_t ProcessReceivedData(uint8_t* data, uint16_t length)
 {
-    memcpy(processedData, sizeof(data), length);
+    if (length == 0 || length > RX_BUFFER_SIZE) return 0;
+    memcpy(processedData, data, length);
+    return 1;
 }
 
 
 void SendAcknowledgment(uint8_t isValid)
 {
     if (!isValid) {
-        HAL_UART_Transmit(&huart2, nack, sizeof nack, 100);
-        return;
-    }
-    else{
-    	HAL_UART_Transmit(&huart2, ack, sizeof ack, 100);
-    	return;
+        HAL_UART_Transmit(&huart2, &nackByte, 1, 100);
+    } else {
+        HAL_UART_Transmit(&huart2, &ackByte, 1, 100);
     }
 }
 
