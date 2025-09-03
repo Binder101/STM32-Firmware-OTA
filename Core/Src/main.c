@@ -34,13 +34,16 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define RX_BUFFER_SIZE 77
+#define RX_BUFFER_SIZE 128
 #define ACK_BYTE 0x06  // ASCII ACK character
 #define NACK_BYTE 0x15 // ASCII NACK character
 #define ERROR_BYTE_1 0x20 // ERROR BYTE
 #define ERROR_BYTE_2 0x21
 #define HEADER_CHECK 0x22
 #define BAD_HEADER_CHECK 0x23
+#define SHORT_PACKET_BYTE 0x24
+#define LONG_PACKET_BYTE 0x25
+#define SEQUENCE_ERROR 0x90
 /* USER CODE END PD */
 
 /* USER CODE BEGIN PV */
@@ -51,7 +54,16 @@ uint8_t header_good_byte = HEADER_CHECK;
 uint8_t header_bad_byte = BAD_HEADER_CHECK;
 uint8_t errorByte1 = ERROR_BYTE_1;
 uint8_t errorByte2 = ERROR_BYTE_2;
-int isValid = 0;
+uint8_t shortPacketByte = SHORT_PACKET_BYTE;
+uint8_t longPacketByte = LONG_PACKET_BYTE;
+uint8_t sequenceErrorByte = SEQUENCE_ERROR;
+
+int lengthData;
+int sequence;
+int sequence1;
+int sequence2;
+int nextSequence = 0;
+
 
 volatile uint16_t oldPos = 0;
 volatile uint16_t newPos = 0;
@@ -84,12 +96,34 @@ void UartRx_Circular_Reset(void) {
     __enable_irq();
 }
 
-void processData(void){
+void processDataHeaders(void){
 	if(processedData[0] == 0xAA && processedData[1] == 0x55){
 		HAL_UART_Transmit(&huart2, &header_good_byte, 1, 100);
 	} else {
 		HAL_UART_Transmit(&huart2, &header_bad_byte, 1, 100);
 	}
+}
+
+void processDataSequence(void){
+	unsigned int tens = processedData[2];
+	unsigned int  ones = processedData[3];
+	int sequenceNo = 0;
+	if(ones == 0){
+		sequenceNo = tens;
+	} else {
+		sequenceNo = tens + ones;
+	}
+	sequence1 = tens;
+	sequence2 = ones;
+
+	sequence = sequenceNo;
+	if(sequence == nextSequence){
+		nextSequence = sequenceNo + 1;
+	}
+	else {
+		HAL_UART_Transmit(&huart2, &sequenceErrorByte, 1, 100);
+	}
+	// HAL_UART_Transmit(&huart2, &sequenceNo, 1, 100);
 }
 /**
  * @brief Process received UART data
@@ -99,29 +133,44 @@ void processData(void){
  */
 uint8_t ProcessReceivedData(uint8_t* data, uint16_t length)
 {
-    if (length == 0 || length > RX_BUFFER_SIZE) return 0;
+	lengthData = length;
+    if (length == 0 || length >= RX_BUFFER_SIZE) {
+    	UartRx_Circular_Reset();
+    	return 0;
+    }
     else if (length == 76){
 		memcpy(processedData, data, length);
-		processData();
+		processDataHeaders();
+		processDataSequence();
+		UartRx_Circular_Reset();
 		return 1;
     }
     else if (length < 76){
     	UartRx_Circular_Reset();
     	return 2;
     }
-    return 3;
+    else if (length > 76){
+    	UartRx_Circular_Reset();
+    	return 3;
+    }
+    else {
+    	UartRx_Circular_Reset();
+    	return 4;
+    }
 }
 
 
-void SendAcknowledgment(int isValid)
+void SendAcknowledgment(uint8_t isValid)
 {
     if (isValid == 0) {
         HAL_UART_Transmit(&huart2, &nackByte, 1, 100);
     } else if (isValid == 1){
         HAL_UART_Transmit(&huart2, &ackByte, 1, 100);
     } else if (isValid == 2){
-    	HAL_UART_Transmit(&huart2, &errorByte1, 1, 100);
-    } else {
+    	HAL_UART_Transmit(&huart2, &shortPacketByte, 1, 100);
+    } else if (isValid == 3){
+    	HAL_UART_Transmit(&huart2, &longPacketByte, 1, 100);
+    } else if (isValid == 4){
     	HAL_UART_Transmit(&huart2, &errorByte2, 1, 100);
     }
 }
