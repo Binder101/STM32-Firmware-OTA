@@ -18,13 +18,14 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-#include<stdio.h>
-#include<string.h>
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include <stdint.h>
-#include <stddef.h>
+#include<stdio.h>
+#include<string.h>
+#include<stdbool.h>
+#include<stdint.h>
+#include<stddef.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -44,6 +45,8 @@
 #define SHORT_PACKET_BYTE 0x24
 #define LONG_PACKET_BYTE 0x25
 #define SEQUENCE_ERROR 0x90
+#define RESPONSE_LENGTH 8
+#define MAX_PAYLOAD_SIZE 71
 /* USER CODE END PD */
 
 /* USER CODE BEGIN PV */
@@ -57,12 +60,15 @@ uint8_t errorByte2 = ERROR_BYTE_2;
 uint8_t shortPacketByte = SHORT_PACKET_BYTE;
 uint8_t longPacketByte = LONG_PACKET_BYTE;
 uint8_t sequenceErrorByte = SEQUENCE_ERROR;
+uint8_t response[RESPONSE_LENGTH];
+uint8_t payload[MAX_PAYLOAD_SIZE];
 
 int lengthData;
 int sequence;
 int sequence1;
 int sequence2;
 int nextSequence = 0;
+int responseLength = 0;
 
 
 volatile uint16_t oldPos = 0;
@@ -96,17 +102,58 @@ void UartRx_Circular_Reset(void) {
     __enable_irq();
 }
 
+
+
+static uint32_t crc32_update(uint32_t crc, const uint8_t *p, size_t len) {
+    while (len--) {
+        crc ^= *p++;
+        for (int i = 0; i < 8; ++i) {
+            uint32_t mask = -(crc & 1u);
+            crc = (crc >> 1) ^ (0xEDB88320u & mask);
+        }
+    }
+    return crc;
+}
+
+bool verify_crc32_payload_crc(const uint8_t *packet, size_t packet_len) {
+    if (packet_len < 4) return false; // not enough for CRC
+    size_t payload_len = packet_len - 4;
+    uint32_t crc = 0xFFFFFFFFu;
+    crc = crc32_update(crc, packet, payload_len);
+    crc ^= 0xFFFFFFFFu;
+
+    uint32_t rx = (uint32_t)packet[payload_len]
+                | ((uint32_t)packet[payload_len+1] << 8)
+                | ((uint32_t)packet[payload_len+2] << 16)
+                | ((uint32_t)packet[payload_len+3] << 24);
+
+    return crc == rx;
+}
+
+void appendByte(uint8_t value){
+	if(responseLength < RESPONSE_LENGTH){
+		response[responseLength] = value;
+		responseLength++;
+	}
+	else{
+		char *msg = "Response length full";
+		HAL_UART_Transmit(&huart2, (uint8_t*)msg, strlen(msg), 100);
+	}
+}
+
 void processDataHeaders(void){
 	if(processedData[0] == 0xAA && processedData[1] == 0x55){
-		HAL_UART_Transmit(&huart2, &header_good_byte, 1, 100);
+		// HAL_UART_Transmit(&huart2, &header_good_byte, 1, 100);
+		appendByte(0x11);
 	} else {
-		HAL_UART_Transmit(&huart2, &header_bad_byte, 1, 100);
+		// HAL_UART_Transmit(&huart2, &header_bad_byte, 1, 100);
+		appendByte(0x01);
 	}
 }
 
 void processDataSequence(void){
 	unsigned int tens = processedData[2];
-	unsigned int  ones = processedData[3];
+	unsigned int ones = processedData[3];
 	int sequenceNo = 0;
 	if(ones == 0){
 		sequenceNo = tens;
@@ -119,18 +166,65 @@ void processDataSequence(void){
 	sequence = sequenceNo;
 	if(sequence == nextSequence){
 		nextSequence = sequenceNo + 1;
+		appendByte(0x11);
 	}
 	else {
-		HAL_UART_Transmit(&huart2, &sequenceErrorByte, 1, 100);
+		appendByte(0x01);
 	}
 	// HAL_UART_Transmit(&huart2, &sequenceNo, 1, 100);
 }
-/**
- * @brief Process received UART data
- * @param data: pointer to received data
- * @param length: length of received data
- * @retval 1 if data is valid, 0 if invalid
- */
+
+void processDataFooters(void){
+	uint8_t footer_byte_1 = processedData[73];
+	uint8_t footer_byte_2 = processedData[74];
+	if(footer_byte_1 == 0x0D && footer_byte_2 == 0x0A){
+		appendByte(0x11);
+	} else {
+		appendByte(0x01);
+	}
+}
+
+void processLastFlag(void) {
+	uint8_t last_flag_byte = processedData[75];
+
+	int initLen = 2;
+	int endLen = 3;
+	// size_t n = sizeof(processedData)/sizeof(processedData[0]);
+
+	if(last_flag_byte == 0x01){
+		memcpy(payload, processedData + initLen, lengthData - endLen - initLen);
+		appendByte(0x11);
+		if(verify_crc32_payload_crc(payload, lengthData-endLen-initLen)){
+			appendByte(0x12);
+		}
+		else{
+			appendByte(0x14); // Error in the crc-checksum
+		}
+	} else if (last_flag_byte == 0x00) {
+		memcpy(payload, processedData + initLen, lengthData - endLen - initLen);
+		appendByte(0x11);
+		if(verify_crc32_payload_crc(payload, lengthData-endLen-initLen)){
+			appendByte(0x13);
+		} else {
+			appendByte(0x14); // Error in the crc-checksum
+		}
+
+	} else {
+		appendByte(0x01);
+
+	}
+}
+
+void processDataChunkLength(void){
+	uint8_t chunkLength = processedData[4];
+	if(chunkLength == 0x40) {
+		appendByte(0x11);
+	} else {
+		appendByte(0x01);
+	}
+}
+
+
 uint8_t ProcessReceivedData(uint8_t* data, uint16_t length)
 {
 	lengthData = length;
@@ -142,6 +236,9 @@ uint8_t ProcessReceivedData(uint8_t* data, uint16_t length)
 		memcpy(processedData, data, length);
 		processDataHeaders();
 		processDataSequence();
+		processDataChunkLength();
+		processDataFooters();
+		processLastFlag();
 		UartRx_Circular_Reset();
 		return 1;
     }
@@ -176,9 +273,6 @@ void SendAcknowledgment(uint8_t isValid)
 }
 
 
-/**
- * @brief Check for new data in circular DMA buffer
- */
 void CheckForNewData(void)
 {
     newPos = RX_BUFFER_SIZE - __HAL_DMA_GET_COUNTER(huart2.hdmarx);
@@ -187,28 +281,28 @@ void CheckForNewData(void)
     {
         if(newPos > oldPos)
         {
-            // Normal case: no buffer wrap-around
             dataLength = newPos - oldPos;
-
-            // Process data from oldPos to newPos
             uint8_t isValid = ProcessReceivedData(&rxBuffer[oldPos], dataLength);
             SendAcknowledgment(isValid);
+            HAL_UART_Transmit(&huart2, response, sizeof(response)/sizeof(response[0]), 100);
+            // HAL_UART_Transmit(&huart2, payload, 71, 100);
+            responseLength = 0;
+
         }
         else
         {
-            // Buffer wrap-around case
             uint16_t firstPart = RX_BUFFER_SIZE - oldPos;
             uint16_t secondPart = newPos;
-
-            // Copy first part
             memcpy(processedData, &rxBuffer[oldPos], firstPart);
-            // Copy second part
             memcpy(&processedData[firstPart], &rxBuffer[0], secondPart);
 
             dataLength = firstPart + secondPart;
 
             uint8_t isValid = ProcessReceivedData(processedData, dataLength);
             SendAcknowledgment(isValid);
+            HAL_UART_Transmit(&huart2, response, sizeof(response)/sizeof(response[0]), 100);
+            // HAL_UART_Transmit(&huart2, payload, 71, 100);
+            responseLength = 0;
         }
 
         oldPos = newPos;
@@ -275,27 +369,19 @@ int main(void)
   while (1)
   {
     /* USER CODE END WHILE */
+	  CheckForNewData();
+	  if(dataReady)
+	  {
+		  dataReady = 0;
+		  printf("Received %d bytes of data\r\n", dataLength);
+		  for(int i = 0; i < dataLength; i++)
+		  {
+			  printf("%02X ", processedData[i]);
+		  }
+		  printf("\r\n");
+	  }
 
-	  // Check for new data periodically
-	          CheckForNewData();
-
-	          // Process received data if available
-	          if(dataReady)
-	          {
-	              dataReady = 0;
-
-	              // Your data processing logic here
-	              printf("Received %d bytes of data\r\n", dataLength);
-
-	              // Optional: Print received data (for debugging)
-	              for(int i = 0; i < dataLength; i++)
-	              {
-	                  printf("%02X ", processedData[i]);
-	              }
-	              printf("\r\n");
-	          }
-
-	          HAL_Delay(10); // Small delay to prevent overwhelming the system
+	  HAL_Delay(10);
 	  HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5);
 	  HAL_Delay(300);
     /* USER CODE BEGIN 3 */
