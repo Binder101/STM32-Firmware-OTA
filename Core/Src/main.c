@@ -36,9 +36,9 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 #define RX_BUFFER_SIZE 128
-#define ACK_BYTE 0x06  // ASCII ACK character
-#define NACK_BYTE 0x15 // ASCII NACK character
-#define ERROR_BYTE_1 0x20 // ERROR BYTE
+#define ACK_BYTE 0x06
+#define NACK_BYTE 0x15
+#define ERROR_BYTE_1 0x20
 #define ERROR_BYTE_2 0x21
 #define HEADER_CHECK 0x22
 #define BAD_HEADER_CHECK 0x23
@@ -88,17 +88,16 @@ DMA_HandleTypeDef hdma_usart2_rx;
 /* USER CODE BEGIN PV */
 void UART_DMA_Init(void)
 {
-    // Start DMA reception in circular mode
     HAL_UART_Receive_DMA(&huart2, rxBuffer, RX_BUFFER_SIZE);
 }
 
 void UartRx_Circular_Reset(void) {
     __disable_irq();
     oldPos = 0;
-    newPos = RX_BUFFER_SIZE - __HAL_DMA_GET_COUNTER(huart2.hdmarx); // snapshot if needed
+    newPos = RX_BUFFER_SIZE - __HAL_DMA_GET_COUNTER(huart2.hdmarx);
     dataReady = 0;
     dataLength = 0;
-    memset(rxBuffer, 0, RX_BUFFER_SIZE); // optional
+    memset(rxBuffer, 0, RX_BUFFER_SIZE);
     __enable_irq();
 }
 
@@ -116,7 +115,7 @@ static uint32_t crc32_update(uint32_t crc, const uint8_t *p, size_t len) {
 }
 
 bool verify_crc32_payload_crc(const uint8_t *packet, size_t packet_len) {
-    if (packet_len < 4) return false; // not enough for CRC
+    if (packet_len < 4) return false;
     size_t payload_len = packet_len - 4;
     uint32_t crc = 0xFFFFFFFFu;
     crc = crc32_update(crc, packet, payload_len);
